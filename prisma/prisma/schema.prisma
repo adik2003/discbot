@@ -8,8 +8,11 @@ datasource db {
 }
 
 model Attendance {
-  id        String   @id @default(uuid())
+  id        Int     @id @default(autoincrement())
   userId    String
-  clockIn   DateTime
+  clockIn   DateTime @default(now()) // Ensure UTC time is stored
   clockOut  DateTime?
+  username  String  @default("Unknown")  // Add a default value
 }
+
+
