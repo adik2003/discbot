@@ -13,7 +13,27 @@ const client = new Client({
 
 // Clock In
 client.on('messageCreate', async (message) => {
+    if (message.author.bot) return;
     if (message.content.toLowerCase() === '!clockin') {
+
+        try {
+            const existingEntry = await prisma.attendance.findFirst({
+                where: { userId: message.author.id, clockOut: null }
+            });
+            if (existingEntry) {
+                return message.reply("⚠️ You are already clocked in! Use `!clockout` to clock out.");
+            }
+           
+        }
+        catch (error) {
+            console.error("Clock-in error:", error);
+            return message.reply("❌ Error clocking in.");
+        }
+            
+
+            
+           
+        
         const nowUTC = new Date().toISOString(); // Get UTC timestamp
 
         await prisma.attendance.create({
