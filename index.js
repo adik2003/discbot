@@ -1,8 +1,9 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,TextChannel } = require('discord.js');
 const { PrismaClient } = require('@prisma/client');
 const moment = require('moment-timezone');
 const fs=require('fs')
+const cron = require('node-cron');
 const prisma = new PrismaClient();
 const client = new Client({
     intents: [
@@ -68,7 +69,7 @@ client.on('messageCreate', async (message) => {
         logs.forEach(log => {
             const clockIn = log.clockIn ? moment.utc(log.clockIn).tz(timezone).format('YYYY-MM-DD HH:mm:ss') : 'N/A';
             const clockOut = log.clockOut ? moment.utc(log.clockOut).tz(timezone).format('YYYY-MM-DD HH:mm:ss') : 'N/A';
-            csvContent += `${log.id},${log.userId},${log.username},${clockIn},${clockOut}\n`;
+            csvContent += `${log.id},${log.username},${clockIn},${clockOut}\n`;
         });
 
         const filePath = 'attendance_logs.csv';
@@ -186,5 +187,79 @@ client.on('interactionCreate', async (interaction) => {
         });
     }
 });
+
+
+const CLEAR_DB_PASSWORD = process.env.CLEAR_DB_PASSWORD; // Store in .env for security
+
+client.on('messageCreate', async (message) => {
+    if (!message.content.startsWith('!clear')) return;
+
+    const args = message.content.split(' ');
+    if (args.length < 2) {
+        return message.reply("⚠️ **Usage:** `!clear <password>`");
+    }
+
+    const providedPassword = args[1];
+
+    if (providedPassword !== CLEAR_DB_PASSWORD) {
+        return message.reply("❌ **Incorrect password!** Access denied.");
+    }
+
+    try {
+        await prisma.attendance.deleteMany({});
+        message.reply("✅ **Attendance database has been wiped!**");
+    } catch (error) {
+        console.error("Error clearing database:", error);
+        message.reply("❌ **Failed to clear the database.**");
+    }
+});
+
+
+const EXPORT_CHANNEL_ID = process.env.EXPORT_CHANNEL_ID; // Set in .env for security
+
+// Function to export logs and send to Discord channel
+async function exportAttendanceLogs() {
+    try {
+        const logs = await prisma.attendance.findMany();
+
+        if (logs.length === 0) {
+            console.log("No attendance logs to export.");
+            return;
+        }
+
+        let csvContent = 'ID,UserID,Username,ClockIn,ClockOut\n';
+        logs.forEach(log => {
+            const clockIn = log.clockIn ? moment.utc(log.clockIn).format('YYYY-MM-DD HH:mm:ss') : 'N/A';
+            const clockOut = log.clockOut ? moment.utc(log.clockOut).format('YYYY-MM-DD HH:mm:ss') : 'N/A';
+            csvContent += `${log.id},${log.userId},${log.username},${clockIn},${clockOut}\n`;
+        });
+
+        const filePath = 'attendance_logs.csv';
+        fs.writeFileSync(filePath, csvContent, 'utf8');
+
+        const channel = await client.channels.fetch(EXPORT_CHANNEL_ID);
+        if (!channel || !(channel instanceof TextChannel)) {
+            console.error("Invalid export channel ID.");
+            return;
+        }
+
+        await channel.send({
+            content: `📅 **Weekly Attendance Logs Export**`,
+            files: [filePath]
+        });
+
+        fs.unlinkSync(filePath); // Delete file after sending
+        console.log("✅ Attendance logs exported successfully.");
+    } catch (error) {
+        console.error("❌ Error exporting logs:", error);
+    }
+}
+
+// Schedule the task to run every Monday at 00:00 UTC
+cron.schedule('* * * * *', async () => {
+    console.log("⏳ Running scheduled weekly export...");
+    await exportAttendanceLogs();
+});
+
 
 client.login(process.env.BOT_TOKEN);
