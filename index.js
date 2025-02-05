@@ -1,6 +1,8 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits } = require('discord.js');
 const { PrismaClient } = require('@prisma/client');
+const fs = require('fs');
+const moment = require('moment-timezone');
 
 const prisma = new PrismaClient();
 const client = new Client({
@@ -10,6 +12,7 @@ const client = new Client({
         GatewayIntentBits.MessageContent
     ]
 });
+
 
 // Clock In
 client.on('messageCreate', async (message) => {
@@ -44,9 +47,48 @@ client.on('messageCreate', async (message) => {
             }
         });
 
-        message.reply(`✅ Clocked in at <t:${Math.floor(Date.parse(nowUTC) / 1000)}:F> (UTC)`);
+        message.reply(`✅ Clocked in at <t:${Math.floor(Date.parse(nowUTC) / 1000)}:F> `);
         var time=Math.floor(Date.parse(nowUTC) / 1000);
         console.log(time);
+    }
+});
+
+client.on('messageCreate', async (message) => {
+    if (message.content.startsWith('!exportlogs')) {
+        try {
+            const args = message.content.split(' ');
+            const timezone = args[1] || 'UTC'; // Default to UTC if no timezone is provided
+            
+            if (!moment.tz.zone(timezone)) {
+                return message.reply('Invalid timezone. Please provide a valid IANA timezone (e.g., America/New_York, Asia/Kolkata).');
+            }
+            
+            const logs = await prisma.attendance.findMany();
+            if (logs.length === 0) {
+                return message.reply('No attendance logs found.');
+            }
+            
+            let csvContent = 'ID,UserID,Username,ClockIn,ClockOut\n';
+            logs.forEach(log => {
+                const clockIn = log.clockIn ? moment.utc(log.clockIn).tz(timezone).format('YYYY-MM-DD HH:mm:ss') : 'N/A';
+                const clockOut = log.clockOut ? moment.utc(log.clockOut).tz(timezone).format('YYYY-MM-DD HH:mm:ss') : 'N/A';
+               
+                csvContent += `${log.id},${log.userId},${log.username},${clockIn},${clockOut}\n`;
+            });
+            
+            const filePath = 'attendance_logs.csv';
+            fs.writeFileSync(filePath, csvContent, 'utf8');
+            
+            await message.reply({
+                content: `Here are the attendance logs converted to timezone: ${timezone}`,
+                files: [filePath]
+            });
+            
+            fs.unlinkSync(filePath); // Delete the file after sending
+        } catch (error) {
+            console.error('Error exporting logs:', error);
+            message.reply('An error occurred while exporting logs.');
+        }
     }
 });
 
@@ -69,7 +111,7 @@ client.on('messageCreate', async (message) => {
             data: { clockOut: nowUTC }
         });
 
-        message.reply(`⏳ Clocked out at <t:${Math.floor(Date.parse(nowUTC) / 1000)}:F> (UTC)`);
+        message.reply(`⏳ Clocked out at <t:${Math.floor(Date.parse(nowUTC) / 1000)}:F> `);
     }
 });
 client.on('messageCreate', async (message) => {
@@ -91,8 +133,8 @@ client.on('messageCreate', async (message) => {
     }
 
     const historyText = history.map((entry, index) => 
-        `**${index + 1}.** Clocked in: <t:${Math.floor(Date.parse(entry.clockIn) / 1000)}:F> (UTC)
-         ${entry.clockOut ? `Clocked out: <t:${Math.floor(Date.parse(entry.clockOut) / 1000)}:F> (UTC)` : "*Still active*"}`
+        `**${index + 1}.** Clocked in: <t:${Math.floor(Date.parse(entry.clockIn) / 1000)}:F> 
+         ${entry.clockOut ? `Clocked out: <t:${Math.floor(Date.parse(entry.clockOut) / 1000)}:F> ` : "*Still active*"}`
     ).join("\n");
 
     message.reply(`🕒 **Attendance history for ${mentionedUser.username}:**\n${historyText}`);
