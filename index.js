@@ -256,7 +256,7 @@ async function exportAttendanceLogs() {
 }
 
 // Schedule the task to run every Monday at 00:00 UTC
-cron.schedule('* * * * *', async () => {
+cron.schedule('0 0 * * 1', async () => {
     console.log("⏳ Running scheduled weekly export...");
     await exportAttendanceLogs();
 });
