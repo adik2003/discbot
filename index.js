@@ -150,28 +150,35 @@ client.on('interactionCreate', async (interaction) => {
             });
 
             // Update workHours table
-            let workHours = await prisma.workHours.findFirst({
-                where: { userId }
-            });
+           // Update workHours table
+let workHours = await prisma.workHours.findFirst({
+    where: { userId }
+});
 
-            if (workHours) {
-                await prisma.workHours.update({
-                    where: { userId },
-                    data: {
-                        totalHours: workHours.totalHours + hoursWorked,
-                        totalMinutes: (workHours.totalMinutes + minutesWorked) % 60
-                    }
-                });
-            } else {
-                await prisma.workHours.create({
-                    data: {
-                        userId,
-                        username: interaction.user.username,
-                        totalHours: hoursWorked,
-                        totalMinutes: minutesWorked % 60
-                    }
-                });
-            }
+if (workHours) {
+    // Convert minutes to hours if they exceed 60
+    let newTotalMinutes = workHours.totalMinutes + minutesWorked;
+    let extraHours = Math.floor(newTotalMinutes / 60);
+    newTotalMinutes = newTotalMinutes % 60;
+
+    await prisma.workHours.update({
+        where: { userId },
+        data: {
+            totalHours: workHours.totalHours + hoursWorked + extraHours,
+            totalMinutes: newTotalMinutes
+        }
+    });
+} else {
+    await prisma.workHours.create({
+        data: {
+            userId,
+            username: interaction.user.username,
+            totalHours: hoursWorked + Math.floor(minutesWorked / 60),
+            totalMinutes: minutesWorked % 60
+        }
+    });
+}
+
 
             await interaction.reply({
                 content: `⏳ **Clocked out at:** <t:${Math.floor(nowUTC / 1000)}:F>. You've worked **${hoursWorked} hours and ${minutesWorked % 60} minutes** this session.`,
@@ -214,9 +221,11 @@ client.on('interactionCreate', async (interaction) => {
     } else if (interaction.customId === "currenttime") {
         // Show current time in user's timezone
         await interaction.reply({
-            content: `🕒 **Current Time:** <t:${Math.floor(Date.now() / 1000)}:F>`,
-            ephemeral: true
+            content: `✅ **Clocked in at:** <t:${Math.floor(nowUTC / 1000)}:F>`,
+            flags: 64 // Ephemeral messages should now use this flag
         });
+        
+
     }
 });
 
@@ -305,7 +314,7 @@ async function exportAttendanceLogs() {
 }
 
 
-cron.schedule('0 0 * * 1', async () => {
+cron.schedule('* * * * *', async () => {
     console.log("⏳ Exporting work hours...");
 
     try {
@@ -318,7 +327,7 @@ cron.schedule('0 0 * * 1', async () => {
 
         let csvContent = 'UserID,Username,TotalHours,TotalMinutes\n';
         workHoursData.forEach(record => {
-            csvContent += `${record.userId},${record.username},${record.totalHours},${record.totalMinutes}\n`;
+            csvContent += `${record.userId},${record.username},${record.totalHours} Hours,${record.totalMinutes} Minutes\n`;
         });
 
         const filePath = 'work_hours.csv';
