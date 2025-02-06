@@ -15,4 +15,13 @@ model Attendance {
   username  String  @default("Unknown")  // Add a default value
 }
 
+model WorkHours {
+  id        String  @id @default(uuid())
+  userId    String  @unique
+  username  String
+  
+  totalHours   Int  @default(0)
+  totalMinutes Int  @default(0)
+}
+
 

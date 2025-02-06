@@ -128,7 +128,7 @@ client.on('interactionCreate', async (interaction) => {
     if (!interaction.isButton()) return;
 
     const userId = interaction.user.id;
-    const nowUTC = new Date().toISOString();
+    const nowUTC = new Date();
 
     if (interaction.customId === "clockinout") {
         // Check if the user is already clocked in
@@ -137,32 +137,64 @@ client.on('interactionCreate', async (interaction) => {
         });
 
         if (existingEntry) {
-            // Clock out
+            // User is clocking out
+            const clockInTime = new Date(existingEntry.clockIn);
+            const durationMs = nowUTC - clockInTime;
+            const minutesWorked = Math.floor(durationMs / (1000 * 60));
+            const hoursWorked = Math.floor(minutesWorked / 60);
+
+            // Update attendance record
             await prisma.attendance.update({
                 where: { id: existingEntry.id },
-                data: { clockOut: nowUTC }
+                data: { clockOut: nowUTC.toISOString() }
             });
 
+            // Update workHours table
+            let workHours = await prisma.workHours.findFirst({
+                where: { userId }
+            });
+
+            if (workHours) {
+                await prisma.workHours.update({
+                    where: { userId },
+                    data: {
+                        totalHours: workHours.totalHours + hoursWorked,
+                        totalMinutes: (workHours.totalMinutes + minutesWorked) % 60
+                    }
+                });
+            } else {
+                await prisma.workHours.create({
+                    data: {
+                        userId,
+                        username: interaction.user.username,
+                        totalHours: hoursWorked,
+                        totalMinutes: minutesWorked % 60
+                    }
+                });
+            }
+
             await interaction.reply({
-                content: `⏳ **Clocked out at:** <t:${Math.floor(Date.parse(nowUTC) / 1000)}:F>`,
+                content: `⏳ **Clocked out at:** <t:${Math.floor(nowUTC / 1000)}:F>. You've worked **${hoursWorked} hours and ${minutesWorked % 60} minutes** this session.`,
                 ephemeral: true
             });
+
         } else {
-            // Clock in
+            // User is clocking in
             await prisma.attendance.create({
                 data: {
                     userId,
                     username: interaction.user.username,
-                    clockIn: nowUTC
+                    clockIn: nowUTC.toISOString()
                 }
             });
 
             await interaction.reply({
-                content: `✅ **Clocked in at:** <t:${Math.floor(Date.parse(nowUTC) / 1000)}:F>`,
+                content: `✅ **Clocked in at:** <t:${Math.floor(nowUTC / 1000)}:F>`,
                 ephemeral: true
             });
         }
-    } else if (interaction.customId === "checkstatus") {
+    }
+    else if (interaction.customId === "checkstatus") {
         // Check if user is currently clocked in
         const activeEntry = await prisma.attendance.findFirst({
             where: { userId, clockOut: null }
@@ -188,6 +220,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 });
 
+   
 
 const CLEAR_DB_PASSWORD = process.env.CLEAR_DB_PASSWORD; // Store in .env for security
 
@@ -208,9 +241,25 @@ client.on('messageCreate', async (message) => {
     try {
         await prisma.attendance.deleteMany({});
         message.reply("✅ **Attendance database has been wiped!**");
+        await prisma.workHours.deleteMany({});
+        message.reply("✅ **Workhour database has been wiped!**");
     } catch (error) {
         console.error("Error clearing database:", error);
         message.reply("❌ **Failed to clear the database.**");
+    }
+});
+
+client.on('messageCreate', async (message) => {
+    if (message.content.toLowerCase() === '!myhours') {
+        const workHours = await prisma.workHours.findUnique({
+            where: { userId: message.author.id }
+        });
+
+        if (!workHours) {
+            return message.reply("You haven't logged any hours yet.");
+        }
+
+        message.reply(`🕒 **${message.author.username}**, you have worked a total of **${workHours.totalHours} hours and ${workHours.totalMinutes} minutes**.`);
     }
 });
 
@@ -254,6 +303,44 @@ async function exportAttendanceLogs() {
         console.error("❌ Error exporting logs:", error);
     }
 }
+
+
+cron.schedule('0 0 * * 1', async () => {
+    console.log("⏳ Exporting work hours...");
+
+    try {
+        const workHoursData = await prisma.workHours.findMany();
+
+        if (workHoursData.length === 0) {
+            console.log("⚠️ No work hours data found.");
+            return;
+        }
+
+        let csvContent = 'UserID,Username,TotalHours,TotalMinutes\n';
+        workHoursData.forEach(record => {
+            csvContent += `${record.userId},${record.username},${record.totalHours},${record.totalMinutes}\n`;
+        });
+
+        const filePath = 'work_hours.csv';
+        fs.writeFileSync(filePath, csvContent, 'utf8');
+
+        const channel = await client.channels.fetch(EXPORT_CHANNEL_ID);
+        if (!channel) {
+            console.error("❌ Failed to fetch the export channel.");
+            return;
+        }
+
+        await channel.send({
+            content: "📁 Weekly Work Hours Report:",
+            files: [filePath]
+        });
+
+        fs.unlinkSync(filePath); // Delete the file after sending
+        console.log("✅ Work hours exported successfully.");
+    } catch (error) {
+        console.error("❌ Error exporting work hours:", error);
+    }
+});
 
 // Schedule the task to run every Monday at 00:00 UTC
 cron.schedule('0 0 * * 1', async () => {
