@@ -1,9 +1,20 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,TextChannel } = require('discord.js');
+const { Message,Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,TextChannel } = require('discord.js');
 const { PrismaClient } = require('@prisma/client');
+/**
+ * Clears the attendance and work hours database.
+ * @param {Message} message - The Discord message object.
+ *  
+ */
 const moment = require('moment-timezone');
 const fs=require('fs')
 const cron = require('node-cron');
+const date = new Date();
+const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+const formattedDate = date.toLocaleDateString('en-US', options);
+
+
+
 const prisma = new PrismaClient();
 const client = new Client({
     intents: [
@@ -48,47 +59,10 @@ client.on('messageCreate', async (message) => {
 client.on('messageCreate', async (message) => {
     if (message.content.startsWith('!exportlogs')) {
         
-    try {
-        console.log("⏳ Exporting logs...");
-        const args = message.content.split(' ');
-        const timezone = args[1] || 'UTC'; // Default timezone
-
-        // Validate timezone
-        if (!moment.tz.zone(timezone)) {
-            return message.reply('❌ Invalid timezone! Use a valid IANA timezone (e.g., America/New_York, Asia/Kolkata).');
-        }
-
-        const logs = await prisma.attendance.findMany();
-        console.log("📝 Retrieved logs:", logs.length);
-
-        if (logs.length === 0) {
-            return message.reply('⚠️ No attendance logs found.');
-        }
-
-        let csvContent = 'ID,UserID,Username,ClockIn,ClockOut\n';
-        logs.forEach(log => {
-            const clockIn = log.clockIn ? moment.utc(log.clockIn).tz(timezone).format('YYYY-MM-DD HH:mm:ss') : 'N/A';
-            const clockOut = log.clockOut ? moment.utc(log.clockOut).tz(timezone).format('YYYY-MM-DD HH:mm:ss') : 'N/A';
-            csvContent += `${log.id},${log.username},${clockIn},${clockOut}\n`;
-        });
-
-        const filePath = 'attendance_logs.csv';
-        fs.writeFileSync(filePath, csvContent, 'utf8');
-        console.log("✅ File created:", filePath);
-
-        await message.reply({
-            content: `📂 Attendance logs for **${timezone}** exported successfully.`,
-            files: [filePath]
-        });
-
-        fs.unlinkSync(filePath); // Delete after sending
-        console.log("🗑 File deleted after sending.");
-    } catch (error) {
-        console.error('❌ Export Logs Error:', error);
-        message.reply('❌ An error occurred while exporting logs.');
-    }
-}
-});
+   
+        const res=await exportAttendanceLogs(message);
+        
+   }});
 
 
 
@@ -156,19 +130,28 @@ let workHours = await prisma.workHours.findFirst({
 });
 
 if (workHours) {
-    // Convert minutes to hours if they exceed 60
     let newTotalMinutes = workHours.totalMinutes + minutesWorked;
+
+    // Correct minute to hour conversion
     let extraHours = Math.floor(newTotalMinutes / 60);
     newTotalMinutes = newTotalMinutes % 60;
+
+    // ✅ Fix: Remove double counting of hoursWorked
+    let newTotalHours = workHours.totalHours + extraHours; 
 
     await prisma.workHours.update({
         where: { userId },
         data: {
-            totalHours: workHours.totalHours + hoursWorked + extraHours,
+            totalHours: newTotalHours,
             totalMinutes: newTotalMinutes
         }
     });
-} else {
+}
+
+
+
+
+ else {
     await prisma.workHours.create({
         data: {
             userId,
@@ -182,7 +165,7 @@ if (workHours) {
 
             await interaction.reply({
                 content: `⏳ **Clocked out at:** <t:${Math.floor(nowUTC / 1000)}:F>. You've worked **${hoursWorked} hours and ${minutesWorked % 60} minutes** this session.`,
-                ephemeral: true
+                flags: 64
             });
 
         } else {
@@ -197,7 +180,7 @@ if (workHours) {
 
             await interaction.reply({
                 content: `✅ **Clocked in at:** <t:${Math.floor(nowUTC / 1000)}:F>`,
-                ephemeral: true
+                flags: 64
             });
         }
     }
@@ -210,53 +193,59 @@ if (workHours) {
         if (activeEntry) {
             await interaction.reply({
                 content: `✅ You are currently **clocked in** since <t:${Math.floor(Date.parse(activeEntry.clockIn) / 1000)}:R>.`,
-                ephemeral: true
+                flags: 64
             });
         } else {
             await interaction.reply({
                 content: "❌ You are **not clocked in**.",
-                ephemeral: true
+                flags: 64
             });
         }
     } else if (interaction.customId === "currenttime") {
         // Show current time in user's timezone
         await interaction.reply({
-            content: `✅ **Clocked in at:** <t:${Math.floor(nowUTC / 1000)}:F>`,
+            content: ` **Current Time:** <t:${Math.floor(nowUTC / 1000)}:F>`,
             flags: 64 // Ephemeral messages should now use this flag
         });
         
 
     }
 });
-
+/**
+ * Clears the attendance and work hours database.
+ * @param {Message} message - The Discord message object.
+ * - The password entered by the user.
+ */
    
 
-const CLEAR_DB_PASSWORD = process.env.CLEAR_DB_PASSWORD; // Store in .env for security
-
-client.on('messageCreate', async (message) => {
-    if (!message.content.startsWith('!clear')) return;
-
-    const args = message.content.split(' ');
-    if (args.length < 2) {
-        return message.reply("⚠️ **Usage:** `!clear <password>`");
-    }
-
-    const providedPassword = args[1];
-
-    if (providedPassword !== CLEAR_DB_PASSWORD) {
-        return message.reply("❌ **Incorrect password!** Access denied.");
-    }
+const CLEAR_DB_PASSWORD = process.env.CLEAR_DB_PASSWORD|""; // Store in .env for security
+const clearDatabase = async (message) => {
+    
 
     try {
         await prisma.attendance.deleteMany({});
-        message.reply("✅ **Attendance database has been wiped!**");
         await prisma.workHours.deleteMany({});
-        message.reply("✅ **Workhour database has been wiped!**");
+
+        if (message) {
+            message.reply("✅ **Attendance and Workhour database have been wiped!**");
+        } else {
+            console.log("✅ Database wiped successfully.");
+        }
     } catch (error) {
-        console.error("Error clearing database:", error);
-        message.reply("❌ **Failed to clear the database.**");
+        console.error("❌ Error clearing database:", error);
+        if (message) message.reply("❌ **Failed to clear the database.**");
     }
+};
+
+
+client.on('messageCreate', async (message) => {
+    if (!message.content.startsWith('!secretwipe')) return;
+
+ 
+
+    await clearDatabase( message);
 });
+
 
 client.on('messageCreate', async (message) => {
     if (message.content.toLowerCase() === '!myhours') {
@@ -272,16 +261,89 @@ client.on('messageCreate', async (message) => {
     }
 });
 
+client.on('messageCreate', async (message) => {
+    if (!message.content.startsWith('!forceclockout')) return;
+
+    try {
+        console.log("⏳ Force clocking out all users...");
+        const clockedInUsers = await prisma.attendance.findMany({
+            where: { clockOut: null }
+        });
+
+        if (clockedInUsers.length === 0) {
+            return message.reply("✅ No users are currently clocked in.");
+        }
+
+        const nowUTC = new Date();
+        for (const user of clockedInUsers) {
+            const clockInTime = new Date(user.clockIn);
+            const durationMs = nowUTC - clockInTime;
+            const minutesWorked = Math.floor(durationMs / (1000 * 60));
+            const hoursWorked = Math.floor(minutesWorked / 60);
+
+            // Update attendance record
+            await prisma.attendance.update({
+                where: { id: user.id },
+                data: { clockOut: nowUTC.toISOString() }
+            });
+
+            // Update work hours
+            let workHours = await prisma.workHours.findFirst({
+                where: { userId: user.userId }
+            });
+
+            if (workHours) {
+                let newTotalMinutes = workHours.totalMinutes + minutesWorked;
+            
+                // Correct minute to hour conversion
+                let extraHours = Math.floor(newTotalMinutes / 60);
+                newTotalMinutes = newTotalMinutes % 60;
+            
+                // ✅ Fix: Remove double counting of hoursWorked
+                let newTotalHours = workHours.totalHours + extraHours; 
+            
+                await prisma.workHours.update({
+                    where: { userId :user.userId},
+                    data: {
+                        totalHours: newTotalHours,
+                        totalMinutes: newTotalMinutes
+                    }
+                });
+            }else {
+                await prisma.workHours.create({
+                    data: {
+                        userId: user.userId,
+                        username: user.username,
+                        totalHours: hoursWorked,
+                        totalMinutes: minutesWorked % 60
+                    }
+                });
+            }
+        }
+
+        message.reply(`✅ Force clocked out **${clockedInUsers.length} users** successfully.`);
+        console.log(`✅ Force clocked out ${clockedInUsers.length} users.`);
+    } catch (error) {
+        console.error("❌ Error force clocking out users:", error);
+        message.reply("❌ An error occurred while force clocking out users.");
+    }
+});
+
 
 const EXPORT_CHANNEL_ID = process.env.EXPORT_CHANNEL_ID; // Set in .env for security
 
 // Function to export logs and send to Discord channel
-async function exportAttendanceLogs() {
+/**
+ * Clears the attendance and work hours database.
+ * @param {Message} message - The Discord message object.
+ * - The password entered by the user.
+ */
+const exportAttendanceLogs=async function (message) {
     try {
         const logs = await prisma.attendance.findMany();
 
         if (logs.length === 0) {
-            console.log("No attendance logs to export.");
+           message.reply("No attendance logs to export.");
             return;
         }
 
@@ -302,7 +364,7 @@ async function exportAttendanceLogs() {
         }
 
         await channel.send({
-            content: `📅 **Weekly Attendance Logs Export**`,
+            content: `📅 Weekly Attendance Logs Export- **${formattedDate}**`,
             files: [filePath]
         });
 
@@ -313,8 +375,13 @@ async function exportAttendanceLogs() {
     }
 }
 
-
-cron.schedule('* * * * *', async () => {
+//0 22 * * 0'
+/**
+ * Clears the attendance and work hours database.
+ * @param {Message} message - The Discord message object.
+ * - The password entered by the user.
+ */
+cron.schedule('0 22 * * 0', async () => {
     console.log("⏳ Exporting work hours...");
 
     try {
@@ -338,23 +405,71 @@ cron.schedule('* * * * *', async () => {
             console.error("❌ Failed to fetch the export channel.");
             return;
         }
-
+        
         await channel.send({
-            content: "📁 Weekly Work Hours Report:",
+            content: `📁 Weekly Work Hours Report - **${formattedDate}**`,
             files: [filePath]
         });
 
         fs.unlinkSync(filePath); // Delete the file after sending
         console.log("✅ Work hours exported successfully.");
+        
+        await clearDatabase();
+        console.log("✅ Database Wiped.");
     } catch (error) {
         console.error("❌ Error exporting work hours:", error);
     }
 });
 
-// Schedule the task to run every Monday at 00:00 UTC
-cron.schedule('0 0 * * 1', async () => {
+// Schedule the task to run every Sunday at 22:00 UTC
+/**
+ * Clears the attendance and work hours database.
+ * @arg {Message} message - The Discord message object.
+ */
+cron.schedule('0 22 * * 0)', async () => {
     console.log("⏳ Running scheduled weekly export...");
     await exportAttendanceLogs();
+    await clearDatabase();
+});
+
+
+const NOTIFICATION_CHANNEL_ID = process.env.NOTIFICATION_CHANNEL_ID; // Set this in your .env file
+
+cron.schedule('*/60 * * * *', async () => {  // Runs every 5 minutes
+    console.log("⏳ Checking for users clocked in for 8 hours...");
+
+    try {
+        const nowUTC = new Date();
+        const eightHoursMs = 8 * 60 * 60 * 1000;
+
+        // Find all users who have clocked in and not clocked out
+        const activeClockIns = await prisma.attendance.findMany({
+            where: { clockOut: null }
+        });
+
+        const notificationChannel = await client.channels.fetch(NOTIFICATION_CHANNEL_ID);
+        if (!notificationChannel) {
+            console.error("❌ Notification channel not found!");
+            return;
+        }
+
+        for (const user of activeClockIns) {
+            const clockInTime = new Date(user.clockIn);
+            const durationMs = nowUTC - clockInTime;
+
+            if (durationMs >= eightHoursMs) {
+                const userId = user.userId;
+
+                const message = `🚨 <@${userId}>, you have been clocked in for **8 hours**! Please head to <#1326054828853690368>  if you wish to clock out.`;
+
+                // Send the notification to the designated channel
+                await notificationChannel.send(message);
+                console.log(`✅ Sent 8-hour notification for ${user.username}`);
+            }
+        }
+    } catch (error) {
+        console.error("❌ Error checking 8-hour clock-ins:", error);
+    }
 });
 
 
